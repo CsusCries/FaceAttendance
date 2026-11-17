@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Face Attendance</title>
+<style>
+  :root{--bg:#f6f7fb;--card:#fff;--text:#1d2433;--muted:#6b7280;--border:#e5e7eb;--accent:#4f46e5;--high:#dc2626}
+  @media (prefers-color-scheme:dark){:root{--bg:#0f1220;--card:#181c2e;--text:#e6e8f0;--muted:#9aa1b5;--border:#2a3048}}
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
+  a{color:var(--accent)}
+  input{font:inherit;color:inherit;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 10px}
+  .btn{font:inherit;border:1px solid var(--border);background:var(--card);color:inherit;padding:8px 14px;border-radius:8px;cursor:pointer}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .muted{color:var(--muted);font-size:.9rem}
+  .wrap{max-width:900px;margin:0 auto;padding:16px}
+  .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+  .tabs .btn[aria-selected=true]{background:var(--accent);border-color:var(--accent);color:#fff}
+  .stage{position:relative;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:4/3}
+  .stage video,.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+  .status{margin:10px 0;font-weight:600}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}
+  .row input[type=text]{flex:1;min-width:180px;font-size:16px}
+  .btn{min-height:44px}
+  .btn.danger{color:var(--high);border-color:var(--high)}
+  .list{list-style:none;padding:0;margin:0}
+  .list li{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--border)}
+  .log li{font-size:.95rem}
+  .panel{display:none}.panel.on{display:block}
+  .note{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 16px;font-size:.92rem}
+  label.consent{display:flex;gap:10px;align-items:flex-start;margin:10px 0}
+  label.consent input{width:22px;height:22px;flex:none;margin-top:2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 style="margin:0">Face Attendance</h1>
+  <p class="muted" style="margin:4px 0 0">Opt-in only. Runs entirely on this device; nothing is uploaded.</p>
+
+  <div class="tabs" role="tablist">
+    <button class="btn" data-tab="identify" aria-selected="true">Check in</button>
+    <button class="btn" data-tab="enroll">Enroll</button>
+    <button class="btn" data-tab="people">People &amp; data</button>
+    <button class="btn" data-tab="privacy">Privacy</button>
+  </div>
+
+  <div class="stage" id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+  </div>
+  <div class="status" id="status">Loading face models…</div>
+
+  <section class="panel on" id="p-identify">
+    <div class="row">
+      <button class="btn primary" id="btnStart">Start camera</button>
+      <button class="btn" id="btnFlip">Switch camera</button>
+    </div>
+    <h3>Check-ins today</h3>
+    <ul class="list log" id="log"></ul>
+    <div class="row"><button class="btn" id="btnCsv">Download check-ins (CSV)</button><button class="btn" id="btnClearLog">Clear check-ins</button></div>
+  </section>
+
+  <section class="panel" id="p-enroll">
+    <div class="row"><input type="text" id="name" placeholder="Full name" autocomplete="off"></div>
+    <label class="consent"><input type="checkbox" id="consent">
+      <span>This person (or their parent/guardian, if under 18) has read the privacy note and agrees to have a face code stored on this device for check-in. They can ask to be removed at any time.</span></label>
+    <div class="row"><button class="btn primary" id="btnEnroll">Capture face (5 shots)</button></div>
+    <p class="muted">Look straight at the camera in good light. Turn your head slightly between shots.</p>
+  </section>
+
+  <section class="panel" id="p-people">
+    <ul class="list" id="people"></ul>
+    <div class="row">
+      <label class="muted" for="thr">Match strictness</label>
+      <input type="range" id="thr" min="0.40" max="0.80" step="0.01" style="flex:1">
+      <span id="thrVal"></span>
+    </div>
+    <label class="consent"><input type="checkbox" id="spoof"><span>Block photos/screens (liveness check; slightly slower)</span></label>
+    <div class="row">
+      <button class="btn" id="btnExport">Export backup</button>
+      <label class="btn" style="display:inline-grid;place-items:center">Import backup<input type="file" id="fileImport" accept="application/json" hidden></label>
+      <button class="btn danger" id="btnWipe">Delete ALL data</button>
+    </div>
+  </section>
+
+  <section class="panel" id="p-privacy">
+    <div class="note">
+      <h3 style="margin-top:0">Privacy note</h3>
+      <ul>
+        <li><b>Opt-in only.</b> Only people who enroll with consent can be recognised. Everyone else shows as "Unknown" and nothing about them is saved.</li>
+        <li><b>No photos are stored.</b> Each person is saved as a name plus a "face code": a list of 1,024 numbers that cannot be turned back into a picture.</li>
+        <li><b>Stays on this device.</b> Face codes and check-ins are kept in this browser only. Nothing is sent to the internet. The camera image is never saved or uploaded.</li>
+        <li><b>Removal.</b> Anyone can ask to be removed; their entry is deleted with one tap under "People &amp; data". "Delete ALL data" erases everything.</li>
+        <li><b>Under 18.</b> A parent or guardian must agree before a student is enrolled, and the school must approve the use of this tool.</li>
+        <li><b>Accuracy.</b> Recognition can make mistakes (lighting, angle, look-alikes). Check-ins should be confirmable and never used alone for discipline or grading.</li>
+        <li><b>Retention.</b> Delete the data at the end of the event, term, or school year, or when it's no longer needed.</li>
+      </ul>
+      <p class="muted">Built with the open-source <a href="https://github.com/vladmandic/human">Human</a> library (MIT license).</p>
+    </div>
+  </section>
+</div>
+
+<script type="module">
+import { Human } from './vendor/human/human.esm.js';
+
+const $ = (id) => document.getElementById(id);
+const KEY = 'faceid.people.v1', LOGKEY = 'faceid.log.v1', SETKEY = 'faceid.settings.v1';
+const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { alert('Could not save: ' + e.message); } };
+
+let people = load(KEY, []);          // [{id, name, embeddings:[[...]], created}]
+let log = load(LOGKEY, []);          // [{name, time}]
+let settings = Object.assign({ threshold: 0.55, antispoof: false }, load(SETKEY, {}));
+let facing = 'user', stream = null, running = false, busy = false;
+const lastSeen = new Map();          // name -> ms, to avoid logging the same person repeatedly
+
+const human = new Human({
+  modelBasePath: './vendor/human/models/',
+  backend: 'webgl',
+  cacheSensitivity: 0,
+  filter: { enabled: true, equalization: true, flip: false },
+  face: {
+    enabled: true,
+    detector: { rotation: false, maxDetected: 5, minConfidence: 0.5, return: false },
+    mesh: { enabled: true }, iris: { enabled: false }, attention: { enabled: false },
+    description: { enabled: true }, emotion: { enabled: false },
+    antispoof: { enabled: true }, liveness: { enabled: true },
+  },
+  body: { enabled: false }, hand: { enabled: false }, object: { enabled: false },
+  gesture: { enabled: false }, segmentation: { enabled: false },
+});
+
+const video = $('video'), canvas = $('overlay'), ctx = canvas.getContext('2d');
+const setStatus = (t) => { $('status').textContent = t; };
+
+// ---------- tabs ----------
+document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('[data-tab]').forEach((x) => x.setAttribute('aria-selected', x === b));
+  document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('on', p.id === 'p-' + b.dataset.tab));
+  $('stage').style.display = ['privacy', 'people'].includes(b.dataset.tab) ? 'none' : '';
+}));
+
+// ---------- camera ----------
+async function startCamera() {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+  } catch (e) { setStatus('Camera blocked: ' + e.message + '. Allow camera access in the browser settings.'); return; }
+  video.srcObject = stream;
+  await video.play();
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  video.style.transform = canvas.style.transform = facing === 'user' ? 'scaleX(-1)' : 'none';
+  $('btnStart').textContent = 'Camera on';
+  if (!running) { running = true; loop(); }
+}
+$('btnStart').onclick = startCamera;
+$('btnFlip').onclick = () => { facing = facing === 'user' ? 'environment' : 'user'; startCamera(); };
+
+// ---------- matching ----------
+function bestMatch(emb) {
+  let best = { name: null, sim: 0 };
+  for (const p of people) for (const e of p.embeddings) {
+    const sim = human.match.similarity(emb, e);
+    if (sim > best.sim) best = { name: p.name, sim };
+  }
+  return best;
+}
+function isReal(f) { return !settings.antispoof || ((f.real ?? 1) > 0.5 && (f.live ?? 1) > 0.5); }
+
+function draw(faces) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (const f of faces) {
+    const [x, y, w, h] = f.box;
+    ctx.lineWidth = 4; ctx.strokeStyle = f._color; ctx.strokeRect(x, y, w, h);
+    // text is drawn un-mirrored so it reads correctly on the mirrored canvas
+    ctx.save();
+    const mirror = facing === 'user';
+    if (mirror) { ctx.scale(-1, 1); ctx.translate(-canvas.width, 0); }
+    const tx = mirror ? canvas.width - x - w : x;
+    ctx.font = 'bold 22px system-ui'; const label = f._label;
+    const tw = ctx.measureText(label).width + 12;
+    ctx.fillStyle = f._color; ctx.fillRect(tx, Math.max(0, y - 30), tw, 30);
+    ctx.fillStyle = '#fff'; ctx.fillText(label, tx + 6, Math.max(22, y - 8));
+    ctx.restore();
+  }
+}
+
+async function loop() {
+  if (!running) return;
+  if (!busy && video.readyState >= 2) {
+    busy = true;
+    try {
+      const res = await human.detect(video);
+      const faces = res.face || [];
+      for (const f of faces) {
+        if (!f.embedding || !f.embedding.length) { f._label = 'Hold still…'; f._color = '#6b7280'; continue; }
+        if (!isReal(f)) { f._label = 'Not a live face'; f._color = '#dc2626'; continue; }
+        const m = bestMatch(f.embedding);
+        if (m.name && m.sim >= settings.threshold) {
+          f._label = `${m.name} ${(m.sim * 100).toFixed(0)}%`; f._color = '#16a34a';
+          checkIn(m.name);
+        } else { f._label = 'Unknown'; f._color = '#f59e0b'; }
+      }
+      draw(faces);
+      if (!people.length) setStatus('No one enrolled yet. Go to "Enroll" to add someone.');
+      else setStatus(faces.length ? `${faces.length} face(s) in view` : 'Looking for faces…');
+    } catch (e) { setStatus('Error: ' + e.message); }
+    busy = false;
+  }
+  requestAnimationFrame(loop);
+}
+
+function checkIn(name) {
+  const now = Date.now();
+  if (now - (lastSeen.get(name) || 0) < 60_000) return; // once per minute max
+  lastSeen.set(name, now);
+  const today = new Date().toDateString();
+  if (log.some((l) => l.name === name && new Date(l.time).toDateString() === today)) return;
+  log.unshift({ name, time: new Date().toISOString() }); save(LOGKEY, log); renderLog();
+}
+
+// ---------- enroll ----------
+$('btnEnroll').onclick = async () => {
+  const name = $('name').value.trim();
+  if (!name) return alert('Enter a name first.');
+  if (!$('consent').checked) return alert('Consent is required before enrolling.');
+  if (!stream) await startCamera();
+  if (!stream) return;
+  const shots = []; running = false; await new Promise((r) => setTimeout(r, 150));
+  for (let tries = 0; shots.length < 5 && tries < 60; tries++) {
+    setStatus(`Capturing ${shots.length + 1} of 5… look at the camera`);
+    const res = await human.detect(video);
+    const faces = (res.face || []).filter((f) => f.embedding?.length);
+    if (faces.length === 1 && faces[0].score > 0.6 && isReal(faces[0])) {
+      shots.push(Array.from(faces[0].embedding));
+      await new Promise((r) => setTimeout(r, 500));
+    } else if (faces.length > 1) setStatus('Only one person in view, please.');
+  }
+  running = true; loop();
+  if (shots.length < 3) return setStatus('Could not get a clear face. Try better light and hold the tablet steady.');
+  const clash = people.find((p) => p.name.toLowerCase() === name.toLowerCase());
+  if (clash) clash.embeddings.push(...shots);
+  else people.push({ id: crypto.randomUUID(), name, embeddings: shots, created: new Date().toISOString() });
+  save(KEY, people); renderPeople();
+  $('name').value = ''; $('consent').checked = false;
+  setStatus(`Enrolled ${name} (${shots.length} shots).`);
+};
+
+// ---------- people & data ----------
+function renderPeople() {
+  const ul = $('people'); ul.innerHTML = '';
+  if (!people.length) ul.innerHTML = '<li class="muted">No one enrolled.</li>';
+  for (const p of people) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span><b></b><br><span class="muted"></span></span><button class="btn danger">Remove</button>`;
+    li.querySelector('b').textContent = p.name;
+    li.querySelector('.muted').textContent = `Enrolled ${new Date(p.created).toLocaleDateString()} · ${p.embeddings.length} shots`;
+    li.querySelector('button').onclick = () => {
+      if (!confirm(`Remove ${p.name} and their face code?`)) return;
+      people = people.filter((x) => x.id !== p.id); save(KEY, people); renderPeople();
+    };
+    ul.appendChild(li);
+  }
+}
+function renderLog() {
+  const ul = $('log'); ul.innerHTML = '';
+  const today = new Date().toDateString();
+  const items = log.filter((l) => new Date(l.time).toDateString() === today);
+  if (!items.length) ul.innerHTML = '<li class="muted">No check-ins yet today.</li>';
+  for (const l of items) {
+    const li = document.createElement('li');
+    li.textContent = `${new Date(l.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} — ${l.name}`;
+    ul.appendChild(li);
+  }
+}
+function download(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+$('btnCsv').onclick = () => download('check-ins.csv',
+  'name,time\n' + log.map((l) => `"${l.name.replace(/"/g, '""')}",${l.time}`).join('\n'), 'text/csv');
+$('btnClearLog').onclick = () => { if (confirm('Clear all check-ins?')) { log = []; save(LOGKEY, log); renderLog(); } };
+$('btnExport').onclick = () => download('faceid-backup.json', JSON.stringify({ version: 1, people }), 'application/json');
+$('fileImport').onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    if (!Array.isArray(data.people)) throw new Error('Not a Face Attendance backup');
+    people = data.people; save(KEY, people); renderPeople(); alert(`Imported ${people.length} people.`);
+  } catch (err) { alert('Import failed: ' + err.message); }
+  e.target.value = '';
+};
+$('btnWipe').onclick = () => {
+  if (!confirm('Delete ALL enrolled people and check-ins from this device? This cannot be undone.')) return;
+  people = []; log = []; localStorage.removeItem(KEY); localStorage.removeItem(LOGKEY);
+  renderPeople(); renderLog(); setStatus('All data deleted.');
+};
+const thr = $('thr');
+thr.value = settings.threshold; $('thrVal').textContent = Math.round(settings.threshold * 100) + '%';
+thr.oninput = () => { settings.threshold = +thr.value; $('thrVal').textContent = Math.round(thr.value * 100) + '%'; save(SETKEY, settings); };
+$('spoof').checked = settings.antispoof;
+$('spoof').onchange = () => { settings.antispoof = $('spoof').checked; save(SETKEY, settings); };
+
+renderPeople(); renderLog();
+try {
+  await human.load(); await human.warmup();
+  setStatus('Ready. Tap "Start camera".');
+} catch (e) { setStatus('Could not load face models: ' + e.message); }
+</script>
+</body>
+</html>
